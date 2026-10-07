@@ -104,6 +104,16 @@ export interface Interface {
   cancel(input: CancelNotification): Promise<void>
 }
 
+function normalizeCwd(cwd: string) {
+  // Zed sends the host OS path, but this ACP process runs inside
+  // a project-only Linux container rooted at /workspace.
+  //
+  // Keep native container paths unchanged. Translate Windows-style
+  // absolute paths to the container's current working directory.
+  if (/^[A-Za-z]:[\\/]/.test(cwd)) return process.cwd()
+  return cwd
+}
+
 export function make(input: {
   readonly client: OpenCodeClient
   readonly connection: ACPConnection.Connection
@@ -216,24 +226,27 @@ export function make(input: {
       return {}
     },
     newSession: async (params) => {
-      const currentCatalog = await catalog(params.cwd)
+      const cwd = normalizeCwd(params.cwd)
+      const currentCatalog = await catalog(cwd)
       const created = await input.client.session.create({
-        location: { directory: params.cwd },
+        location: { directory: cwd },
         agent: currentCatalog.defaultModeID,
         model: currentCatalog.defaultModel,
       })
-      const state = await attach(created, params.cwd, params.mcpServers)
+      const state = await attach(created, cwd, params.mcpServers)
       return { sessionId: state.id, configOptions: configOptions(state) }
     },
     loadSession: async (params) => {
-      const session = await getSession(input.client, params.sessionId, params.cwd)
+      const cwd = normalizeCwd(params.cwd)
+      const session = await getSession(input.client, params.sessionId, cwd)
       const state = await attach(session, session.location.directory, params.mcpServers)
       await replay(state)
       return { configOptions: configOptions(state) }
     },
     listSessions: async (params) => {
+      const cwd = params.cwd ? normalizeCwd(params.cwd) : undefined
       const page = await input.client.session.list({
-        ...(params.cwd ? { directory: params.cwd } : {}),
+        ...(cwd ? { directory: cwd } : {}),
         order: "desc",
         limit: 100,
         ...(params.cursor ? { cursor: params.cursor } : {}),
@@ -256,7 +269,8 @@ export function make(input: {
       return {}
     },
     resumeSession: async (params) => {
-      const session = await getSession(input.client, params.sessionId, params.cwd)
+      const cwd = normalizeCwd(params.cwd)
+      const session = await getSession(input.client, params.sessionId, cwd)
       const state = await attach(session, session.location.directory, params.mcpServers ?? [])
       return { configOptions: configOptions(state) }
     },
